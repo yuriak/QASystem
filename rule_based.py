@@ -1,10 +1,6 @@
 # -*- coding:utf-8 -*-
-import pandas as pd
-import numpy as np
 import json
 import nltk
-import gensim
-import itertools
 import csv
 import pickle
 import spacy
@@ -13,7 +9,6 @@ import sklearn
 import collections
 import itertools
 import numpy as np
-import en_core_web_lg
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 lmap = lambda func, it: list(map(func, it))
@@ -22,10 +17,16 @@ with open('documents.json', 'r+') as f:
 with open('testing.json', 'r+') as f:
     test = json.loads(f.read())
 
-nlp = en_core_web_lg.load()
+# need to load spacy large language model
+# python3 -m pip install spacy
+# python3 -m spacy download en_core_web_lg
+
+
+nlp = spacy.load('en_core_web_lg')
 nlp.add_pipe(nlp.create_pipe('sentencizer'))
 n = lambda x: nlp(x)
 
+# gather all the documents which appeared in the test set
 test_docids = list(set(lmap(lambda x: x['docid'], test)))
 test_docs = list(filter(lambda x: x['docid'] in test_docids, documents))
 test_docs = dict(zip(test_docids, test_docs))

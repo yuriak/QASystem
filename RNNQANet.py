@@ -4,7 +4,7 @@ import os
 
 
 class RNNQANet():
-    def __init__(self, pretrained_param, encoder_units_number=[300, 100], attention_size=[100], hidden_rnn_size=[100], learning_rate=0.001, log_dir='./logs'):
+    def __init__(self, pretrained_embedding, encoder_units_number=[300, 100], attention_size=[100], hidden_rnn_size=[100], learning_rate=0.001, log_dir='./logs', model_path='./RNNQANet'):
         tf.reset_default_graph()
         self.question = tf.placeholder(shape=[None, None], dtype=tf.int32, name='question')
         self.context = tf.placeholder(shape=[None, None], dtype=tf.int32, name='context')
@@ -12,8 +12,9 @@ class RNNQANet():
         self.y_end = tf.placeholder(shape=[None], dtype=tf.int32, name='y_end')
         self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[], name='dropout_keep_prob')
         self.global_step = 0
+        self.model_path=model_path
         with tf.variable_scope('embedding', initializer=tf.contrib.layers.xavier_initializer()):
-            W = tf.Variable(pretrained_param, trainable=True, dtype=tf.float32, name='W_emb')
+            W = tf.Variable(pretrained_embedding, trainable=True, dtype=tf.float32, name='W_emb')
             self.question_input = tf.nn.embedding_lookup(ids=self.question, params=W)
             self.context_input = tf.nn.embedding_lookup(ids=self.context, params=W)
         
@@ -221,11 +222,11 @@ class RNNQANet():
         start, end = self.session.run([self.y_predict_start_index, self.y_predict_end_index], feed_dict=feed_dict)
         return start, end
     
-    def load_model(self, model_path='./QAModel'):
-        self.saver.restore(self.session, model_path + '/rnnqanet')
+    def load_model(self):
+        self.saver.restore(self.session, self.model_path + '/rnnqanet')
     
-    def save_model(self, model_path='./QAModel'):
-        if not os.path.exists(model_path):
-            os.mkdir(model_path)
-        model_file = model_path + '/rnnqanet'
+    def save_model(self, ):
+        if not os.path.exists(self.model_path):
+            os.mkdir(self.model_path)
+        model_file = self.model_path + '/rnnqanet'
         self.saver.save(self.session, model_file)

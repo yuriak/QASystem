@@ -1,0 +1,4 @@
+numpy
+tqdm
+tensorflow
+spacy==2.0.9

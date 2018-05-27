@@ -1,170 +1,166 @@
 # -*- coding:utf-8 -*-
-import tensorflow as tf
-import pandas as pd
-import numpy as np
 import json
-import nltk
-import gensim
-import itertools
-import tflearn as tl
-import csv
-
+from PreProcess import *
 from RNNQANet import RNNQANet
+from RCNNQANet import RCNNQANet
 
-lmap = lambda func, it: list(map(func, it))
 with open('documents.json', 'r+') as f:
     documents = json.loads(f.read())
 with open('training.json', 'r+') as f:
-    query = json.loads(f.read())
+    train = json.loads(f.read())
 with open('testing.json', 'r+') as f:
     test = json.loads(f.read())
-    
+with open('devel.json', 'r+') as f:
+    dev = json.loads(f.read())
 
-tokenizer = nltk.tokenize.SpaceTokenizer()
-sentence_tokenizer = nltk.tokenize.PunktSentenceTokenizer()
+processed_data = pre_process(documents, train, dev, test)
 
+max_train_context_length, max_train_question_length = processed_data['train_corpus']['max_length']
+training_corpus = processed_data['train_corpus']['data']
+max_dev_context_length, max_dev_question_length = processed_data['dev_corpus']['max_length']
+dev_corpus = processed_data['dev_corpus']['data']
+max_test_context_length, max_test_question_length = processed_data['test_corpus']['max_length']
+test_corpus = processed_data['test_corpus']['data']
+weight_matrix = processed_data['embedding']['weight_matrix']
+word_index = processed_data['embedding']['word_index']
+inverted_word_index = processed_data['embedding']['inverted_word_index']
 
-# preprocess documents
-paragraphs = {}
-for d in documents:
-    doc_id = d['docid']
-    for pi, p in enumerate(d['text']):
-        text = p.lower().replace('"', '').replace('`', '').replace('``', '').replace("''", '').replace('``', '')
-        text = list(filter(lambda x: len(x.strip()) > 0, tokenizer.tokenize(text)))
-        paragraphs[(doc_id, pi)] = text
+train_context_col, train_question_col = (max_train_context_length, max_train_context_length + max_train_question_length)
+dev_context_col, dev_question_col = (max_dev_context_length, max_dev_context_length + max_dev_question_length)
+test_context_col, test_question_col = (max_test_context_length, max_test_context_length + max_test_question_length)
+print('training corpus context&question length', max_train_context_length, max_train_question_length)
+print('dev corpus context&question length', max_dev_context_length, max_dev_question_length)
+print('test corpus context&question length', max_test_context_length, max_test_question_length)
 
-# preprocess questions
-processed_query = []
-for q in query:
-    docid = q['docid']
-    paraid = q['answer_paragraph']
-    question_text = q['question'].lower().replace('"', '').replace('`', '').replace('``', '').replace("''", '').replace('``', '')
-    question_token = list(filter(lambda x: len(x.strip()) > 0, tokenizer.tokenize(question_text)))
-    answer_text = q['text'].lower().replace('"', '').replace('`', '').replace('``', '').replace("''", '').replace('``', '')
-    answer_token = list(filter(lambda x: len(x.strip()) > 0, tokenizer.tokenize(answer_text)))
-    processed_query.append({'dp_id': (docid, paraid), 'question': question_token, 'answer': answer_token})
+RNN_model_params = {
+    'encoder_units_number': [300, 100],
+    'attention_size': [100],
+    'hidden_rnn_size': [100],
+    'learning_rate': 0.001,
+    'log_dir': './logs/RNNModel',
+    'model_path': './RNNQANet'
+}
 
-# get tokens
-doc_tokens = list(paragraphs.values())
-query_tokens = lmap(lambda x: x['question'], processed_query)
-answer_tokens = lmap(lambda x: x['answer'], processed_query)
-all_tokens = doc_tokens + query_tokens + answer_tokens
-
-# word embedding
-w2c = gensim.models.Word2Vec(all_tokens, min_count=0, size=100)
-w2c.train(all_tokens, epochs=5, total_examples=w2c.corpus_count)
-for k, v in paragraphs.items():
-    paragraphs[k] = (v, np.array(lmap(lambda x: w2c.wv[x.lower()], v)))
-
-
-def lookup_answer_index(answer_tokens, doc_tokens):
-    doc_length = len(doc_tokens)
-    answer_length = len(answer_tokens)
-    for i in range(doc_length):
-        if doc_length - i < answer_length:
-            return (0, 0)
-        found = True
-        for j in range(answer_length):
-            found = answer_tokens[j] in doc_tokens[i + j]
-            if not found: break
-        if found:
-            return (i, i + answer_length - 1)
+RCNN_model_params = {
+    'encoder_units_number': [300, 100],
+    'attention_size': [100],
+    'cnn_filters': [300, 200, 100],
+    'context_kernal_size': 3,
+    ' question_kernel_size': 2,
+    'learning_rate': 0.001,
+    'log_dir': './logs/RCNNModel',
+    'model_path': './RCNNQANet'
+}
 
 
-def crop_pad_question(max_leng, embedding):
-    if embedding.shape[0] > max_leng:
-        return embedding[:max_leng]
-    dim = embedding.shape[1]
-    pad_leng = max_leng - embedding.shape[0]
-    padded_embedding = np.concatenate((embedding, np.zeros((pad_leng, dim))))
-    assert padded_embedding.shape[0] == max_leng
-    return padded_embedding
+def RNNTrain(model_params, max_epoch=4, max_batch_size=128, checkpoint_interval=10, evaluate_interval=10, evaluate_batch_size=128):
+    rnn = RNNQANet(pretrained_embedding=weight_matrix,
+                   encoder_units_number=model_params['encoder_units_number'],
+                   attention_size=model_params['attention_size'],
+                   hidden_rnn_size=model_params['hidden_rnn_size'],
+                   learning_rate=model_params['learning_rate'],
+                   log_dir=model_params['log_dir'],
+                   model_path=model_params['model_path']
+                   )
+    global_step = 0
+    previous_save_loss = np.inf
+    for e in range(max_epoch):
+        np.random.shuffle(training_corpus)
+        epoch_loss = []
+        it = 0
+        while it < training_corpus.shape[0]:
+            max_context_length = max(np.sum(training_corpus[it:it + max_batch_size, :train_context_col] > 0, axis=1))
+            b_context = training_corpus[it:it + max_batch_size, :max_context_length]
+            max_question_length = max(np.sum(training_corpus[it:it + max_batch_size, train_context_col:train_question_col] > 0, axis=1))
+            b_question = training_corpus[it:it + max_batch_size, train_context_col:train_context_col + max_question_length]
+            b_y1 = training_corpus[it:it + max_batch_size, -2]
+            b_y2 = training_corpus[it:it + max_batch_size, -1]
+            loss = rnn.train(context=b_context, question=b_question, y1=b_y1, y2=b_y2, record_interval=1)
+            epoch_loss.append(loss)
+            print('epoch', e, 'step', global_step, 'iteration', it, 'iteration loss', loss, 'epoch mean loss', np.mean(epoch_loss))
+            it += max_batch_size
+            global_step += 1
+            if global_step % evaluate_interval == 0:
+                np.random.shuffle(dev_corpus)
+                batch_dev_context_length = max(np.sum(dev_corpus[:evaluate_batch_size, :dev_context_col] > 0, axis=1))
+                d_context = dev_corpus[:evaluate_batch_size, :batch_dev_context_length]
+                batch_dev_question_length = max(np.sum(dev_corpus[:evaluate_batch_size, dev_context_col:dev_question_col] > 0, axis=1))
+                d_question = dev_corpus[:evaluate_batch_size, dev_context_col:dev_context_col + batch_dev_question_length]
+                d_y1 = dev_corpus[:evaluate_batch_size, -2]
+                d_y2 = dev_corpus[:evaluate_batch_size, -1]
+                dev_loss = rnn.evaluate(d_context, d_question, d_y1, d_y2)
+                if global_step % checkpoint_interval == 0 and previous_save_loss > dev_loss[0]:
+                    rnn.save_model()
+                    previous_save_loss = dev_loss[0]
+                    print(global_step, 'save model @ val loss', dev_loss[0])
+                print(global_step, 'evaluate loss', dev_loss[0])
+    return rnn
 
 
-# link embedding with tokens
-max_question_length = max(lmap(lambda x: len(x['question']), processed_query))
-for q in processed_query:
-    #     {'dp_id':(doc_id,paraid),'question':question_token,'answer':answer_token}
-    doc_t = paragraphs[q['dp_id']][0]
-    answer_t = q['answer']
-    query_t = q['question']
-    start, end = lookup_answer_index(answer_t, doc_t)
-    start_vec = np.zeros((len(doc_t), 1), dtype=np.float32)
-    start_vec[start] = 1.0
-    end_vec = np.zeros((len(doc_t), 1), dtype=np.float32)
-    end_vec[end] = 1.0
-    q['answer_span'] = (start_vec, end_vec)
-    query_embedding = np.array(lmap(lambda x: w2c.wv[x], query_t))
-    q['query_embedding'] = crop_pad_question(max_question_length, query_embedding)
+def RCNNTrain(model_params, max_epoch=4, max_batch_size=128, checkpoint_interval=10, evaluate_interval=10, evaluate_batch_size=128):
+    rcnn = RCNNQANet(pretrained_embedding=weight_matrix,
+                     encoder_units_number=model_params['encoder_units_number'],
+                     attention_size=model_params['attention_size'],
+                     cnn_filters=model_params['cnn_filters'],
+                     context_kernal_size=model_params['context_kernal_size'],
+                     question_kernel_size=model_params['question_kernel_size'],
+                     learning_rate=model_params['learning_rate'],
+                     log_dir=model_params['log_dir'],
+                     model_path=model_params['model_path'])
+    global_step = 0
+    previous_save_loss = np.inf
+    for e in range(max_epoch):
+        np.random.shuffle(training_corpus)
+        epoch_loss = []
+        it = 0
+        while it < training_corpus.shape[0]:
+            max_context_length = max(np.sum(training_corpus[it:it + max_batch_size, :train_context_col] > 0, axis=1))
+            b_context = training_corpus[it:it + max_batch_size, :max_context_length]
+            max_question_length = max(np.sum(training_corpus[it:it + max_batch_size, train_context_col:train_question_col] > 0, axis=1))
+            b_question = training_corpus[it:it + max_batch_size, train_context_col:train_context_col + max_question_length]
+            b_y1 = training_corpus[it:it + max_batch_size, -2]
+            b_y2 = training_corpus[it:it + max_batch_size, -1]
+            loss = rcnn.train(context=b_context, question=b_question, y1=b_y1, y2=b_y2, record_interval=1)
+            epoch_loss.append(loss)
+            print('epoch', e, 'step', global_step, 'iteration', it, 'iteration loss', loss, 'epoch mean loss', np.mean(epoch_loss))
+            it += max_batch_size
+            global_step += 1
+            if global_step % evaluate_interval == 0:
+                np.random.shuffle(dev_corpus)
+                batch_dev_context_length = max(np.sum(dev_corpus[:evaluate_batch_size, :dev_context_col] > 0, axis=1))
+                d_context = dev_corpus[:evaluate_batch_size, :batch_dev_context_length]
+                batch_dev_question_length = max(np.sum(dev_corpus[:evaluate_batch_size, dev_context_col:dev_question_col] > 0, axis=1))
+                d_question = dev_corpus[:evaluate_batch_size, dev_context_col:dev_context_col + batch_dev_question_length]
+                d_y1 = dev_corpus[:evaluate_batch_size, -2]
+                d_y2 = dev_corpus[:evaluate_batch_size, -1]
+                dev_loss = rcnn.evaluate(d_context, d_question, d_y1, d_y2)
+                if global_step % checkpoint_interval == 0 and previous_save_loss > dev_loss[0]:
+                    rcnn.save_model()
+                    previous_save_loss = dev_loss[0]
+                    print(global_step, 'save model @ val loss', dev_loss[0])
+                print(global_step, 'evaluate loss', dev_loss[0])
+    return rcnn
 
-qanet = RNNQANet()
 
-# train
-epoch = 10
-batch_index = list(paragraphs.keys())
-for e in range(epoch):
-    np.random.shuffle(batch_index)
-    batch_loss = []
-    count = 0
-    for bk in batch_index:
-        context = np.expand_dims(paragraphs[bk][1], axis=0)
-        para_questions = list(filter(lambda x: x['dp_id'] == bk, processed_query))
-        if len(para_questions) == 0:
-            continue
-        question = np.array(lmap(lambda x: x['query_embedding'], para_questions))
-        y_start = np.array(lmap(lambda x: x['answer_span'][0], para_questions))
-        y_end = np.array(lmap(lambda x: x['answer_span'][1], para_questions))
-        loss = qanet.train(context, question, y_start, y_end)
-        batch_loss.append(loss)
-        if count % 100 == 0:
-            print(count, 'batch loss', np.mean(batch_loss))
-            batch_loss = []
-        count += 1
-
-qanet.save_model()
-
-# preprocess for test
-concatenate_doc = {}
-for docid in range(len(documents)):
-    paraids = list(range(len(documents[docid]['text'])))
-    doc_text = paragraphs[(docid, 0)][0]
-    doc_embedding = paragraphs[(docid, 0)][1]
-    for p in paraids[1:]:
-        doc_text = doc_text + paragraphs[(docid, p)][0]
-        doc_embedding = np.concatenate((doc_embedding, paragraphs[(docid, p)][1]))
-    concatenate_doc[docid] = (doc_embedding, doc_text)
-
-processed_test_query = []
-for q in test:
-    docid = q['docid']
-    question_text = q['question'].lower().replace('"', '').replace('`', '').replace('``', '').replace("''", '').replace('``', '')
-    question_token = list(filter(lambda x: len(x.strip()) > 0, tokenizer.tokenize(question_text)))
-    processed_test_query.append({'id': q['id'], 'docid': docid, 'question': question_token})
-
-max_question_length = max(lmap(lambda x: len(x['question']), processed_query))
-for q in processed_test_query:
-    #     {'docid':docid,'question':question_token}
-    query_t = q['question']
-    query_embedding = np.array(lmap(lambda x: w2c.wv[x] if x in w2c.wv else np.random.normal(loc=0, scale=1, size=100), query_t))
-    q['query_embedding'] = crop_pad_question(max_question_length, query_embedding)
-
-# predict
-test_doc_ids = list(set(lmap(lambda x: x['docid'], processed_test_query)))
-final_result = {}
-for bk in test_doc_ids:
-    context = np.expand_dims(concatenate_doc[bk][0], axis=0)
-    questions = list(filter(lambda x: x['docid'] == bk, processed_test_query))
-    question_ids = lmap(lambda x: x['id'], questions)
-    questions = np.array(lmap(lambda x: x['query_embedding'], questions))
-    start, end = qanet.predict(context, questions)
-    start = start.ravel()
-    end = end.ravel()
-    for qid, s, e in zip(question_ids, start, end):
-        final_result[qid] = ' '.join(concatenate_doc[bk][1][s:e + 1]).strip()
-
-result = list(final_result.items())
-result = sorted(result, key=lambda x: x[0])
-
-with open('result.csv', 'w+') as f:
-    csv_writer = csv.writer(f)
-    csv_writer.writerows(result)
+def predict(model, max_batch_size=128):
+    predict_context = test_corpus[:, :test_context_col]
+    predict_question = test_corpus[:, test_context_col:test_question_col]
+    predict_result = []
+    it = 0
+    qi = 0
+    while it < len(predict_question):
+        batch_max_context_length = max(np.sum(predict_context[it:it + max_batch_size, :max_test_context_length] > 0, axis=1))
+        b_context = predict_context[it:it + max_batch_size, :batch_max_context_length]
+        batch_max_question_length = max(np.sum(predict_question[it:it + max_batch_size, :max_test_question_length] > 0, axis=1))
+        b_question = predict_question[it:it + max_batch_size, :batch_max_question_length]
+        batch_result = np.array(model.predict(context=b_context, question=b_question)).T
+        for a, c in zip(batch_result, b_context):
+            y1 = min(a)
+            y2 = max(a)
+            result_token_index = c[y1:y2 + 1]
+            result_tokens = ' '.join(lmap(lambda x: inverted_word_index[x], result_token_index))
+            predict_result.append((qi, result_tokens))
+            qi += 1
+        print(it / len(predict_question))
+        it += max_batch_size
+    return predict_result
