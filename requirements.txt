@@ -2,3 +2,6 @@ numpy
 tqdm
 tensorflow
 spacy==2.0.9
+spacy[en_core_web_lg]
+sklearn
+gensim

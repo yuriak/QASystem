@@ -3,6 +3,7 @@ import json
 from PreProcess import *
 from RNNQANet import RNNQANet
 from RCNNQANet import RCNNQANet
+import csv
 
 with open('documents.json', 'r+') as f:
     documents = json.loads(f.read())
@@ -46,7 +47,7 @@ RCNN_model_params = {
     'attention_size': [100],
     'cnn_filters': [300, 200, 100],
     'context_kernal_size': 3,
-    ' question_kernel_size': 2,
+    'question_kernel_size': 2,
     'learning_rate': 0.001,
     'log_dir': './logs/RCNNModel',
     'model_path': './RCNNQANet'
@@ -94,6 +95,8 @@ def RNNTrain(model_params, max_epoch=4, max_batch_size=128, checkpoint_interval=
                     previous_save_loss = dev_loss[0]
                     print(global_step, 'save model @ val loss', dev_loss[0])
                 print(global_step, 'evaluate loss', dev_loss[0])
+    # make sure it is not overfiting
+    rnn.load_model()
     return rnn
 
 
@@ -139,6 +142,8 @@ def RCNNTrain(model_params, max_epoch=4, max_batch_size=128, checkpoint_interval
                     previous_save_loss = dev_loss[0]
                     print(global_step, 'save model @ val loss', dev_loss[0])
                 print(global_step, 'evaluate loss', dev_loss[0])
+    # make sure it is not overfiting
+    rcnn.load_model()
     return rcnn
 
 
@@ -146,6 +151,7 @@ def predict(model, max_batch_size=128):
     predict_context = test_corpus[:, :test_context_col]
     predict_question = test_corpus[:, test_context_col:test_question_col]
     predict_result = []
+    predict_result.append(('id','answer'))
     it = 0
     qi = 0
     while it < len(predict_question):
@@ -164,3 +170,10 @@ def predict(model, max_batch_size=128):
         print(it / len(predict_question))
         it += max_batch_size
     return predict_result
+
+if __name__ == '__main__':
+    model=RNNTrain(model_params=RNN_model_params)
+    predict_result=predict(model)
+    with open('result.csv','w+') as f:
+        writer=csv.writer(f)
+        writer.writerows(predict_result)
