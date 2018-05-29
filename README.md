@@ -1,6 +1,6 @@
 # QASystem
 
-##Introduction
+## Introduction
 This is the repository for COMP90042 Question and Answering System Project.  
 
 ## Model
@@ -9,7 +9,7 @@ This is the repository for COMP90042 Question and Answering System Project.
 - Use attention find correlation
 - Output the span of the answer
 
-##Performance
+## Performance
 ### Metrics
 | Model      | Train Loss @ Step | Dev Loss @ Step | Dev F1-score |
 |------------|-------------------|-----------------|--------------|
